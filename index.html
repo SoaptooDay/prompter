@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>Phone Prompter</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{
+  --bg:#000; --fg:#f4f4f4; --muted:#8c8c8c; --panel:#151515; --line:#2a2a2a;
+  --accent:#ffd84d; --ok:#3ddc84; --warn:#ffb020; --bad:#ff5a5a;
+  --font:30px; --ph:40vh; --ry:60px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
+button{font:inherit;font-size:16px;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;min-height:46px;cursor:pointer}
+button:active{background:#222}
+button.on{border-color:var(--accent);color:var(--accent)}
+.primary{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
+.hide{display:none!important}
+
+/* ---------- Prompter (phone) ---------- */
+#app{height:100%;display:flex;flex-direction:column}
+#prompt{position:relative;flex:none;height:var(--ph);overflow:hidden;touch-action:none;
+  -webkit-mask-image:linear-gradient(to bottom,rgba(0,0,0,.3) 0,rgba(0,0,0,.3) calc(var(--ry) - 6px),#000 var(--ry),#000 78%,transparent 100%);
+  mask-image:linear-gradient(to bottom,rgba(0,0,0,.3) 0,rgba(0,0,0,.3) calc(var(--ry) - 6px),#000 var(--ry),#000 78%,transparent 100%)}
+#readline{position:absolute;left:0;top:calc(env(safe-area-inset-top,0px) + 8px);width:5px;height:calc(var(--font) * 1.35);background:var(--accent);border-radius:0 4px 4px 0;z-index:2}
+#text{position:absolute;left:0;right:0;top:0;padding:0 9vw;font-size:var(--font);line-height:1.35;font-weight:600;will-change:transform}
+#text p{margin-bottom:.8em}
+#text .done{color:#666}
+
+#panel{flex:1;min-height:0;overflow-y:auto;border-top:1px solid var(--line);padding:12px 14px calc(env(safe-area-inset-bottom,0px) + 12px);display:flex;flex-direction:column;gap:10px}
+.status{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted)}
+.status button{margin-left:auto;min-height:34px;padding:6px 14px;font-size:14px}
+#dot{width:10px;height:10px;border-radius:50%;background:#555;flex:none}
+#dot.ok{background:var(--ok)} #dot.warn{background:var(--warn)} #dot.bad{background:var(--bad)}
+.top{display:flex;gap:12px}
+#preview{width:84px;height:112px;object-fit:cover;border-radius:10px;background:#111;transform:scaleX(-1);flex:none}
+.main{flex:1;display:flex;flex-direction:column;gap:8px}
+.seg{display:flex;gap:6px} .seg button{flex:1}
+.steppers{display:flex;flex-direction:column;gap:6px}
+.step{display:grid;grid-template-columns:62px 52px 1fr 52px;align-items:center;gap:8px}
+.step span{color:var(--muted);font-size:14px}
+.step b{text-align:center;font-weight:600}
+.row{display:flex;gap:8px} .row button{flex:1}
+
+.sheet{position:fixed;inset:0;z-index:20;background:#0b0b0b;display:none;flex-direction:column;gap:12px;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px);overflow-y:auto}
+.sheet.open{display:flex}
+.sheet h2{font-size:20px}
+.sheet p{color:#bbb;font-size:15px;line-height:1.45}
+.sheet code{display:block;word-break:break-all;background:#161616;border:1px solid var(--line);padding:10px;border-radius:10px;font-size:13px;-webkit-user-select:all;user-select:all}
+.big{font-size:34px;font-weight:700;letter-spacing:.15em;color:var(--accent)}
+textarea{flex:1;width:100%;min-height:200px;background:#151515;color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px;font:16px/1.5 -apple-system,system-ui,sans-serif;resize:none;-webkit-user-select:text;user-select:text}
+#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 20px);transform:translateX(-50%);background:#222;border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:14px;z-index:30;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center}
+#toast.show{opacity:1}
+
+/* ---------- Viewer (OBS) ---------- */
+#viewer{display:none}
+body.viewer #app{display:none}
+body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;background:#000}
+#remote{width:100%;height:100%;object-fit:cover;transform-origin:center}
+#vmsg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#888;font:22px system-ui,sans-serif;text-align:center}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="prompt"><div id="readline"></div><div id="text"></div></div>
+  <div id="panel">
+    <div class="status"><i id="dot"></i><span id="status">Camera off</span><button id="setupBtn">Setup</button></div>
+    <div class="top">
+      <video id="preview" muted playsinline autoplay></video>
+      <div class="main">
+        <button id="camBtn" class="primary">Start camera</button>
+        <button id="playBtn">Scroll</button>
+        <div class="seg"><button id="modeWpm">WPM</button><button id="modeVoice">Voice</button></div>
+      </div>
+    </div>
+    <div class="steppers">
+      <div class="step"><span>Speed</span><button data-k="wpm" data-d="-10">−</button><b id="wpmVal"></b><button data-k="wpm" data-d="10">+</button></div>
+      <div class="step"><span>Text</span><button data-k="font" data-d="-2">−</button><b id="fontVal"></b><button data-k="font" data-d="2">+</button></div>
+      <div class="step"><span>Window</span><button data-k="ph" data-d="-5">−</button><b id="phVal"></b><button data-k="ph" data-d="5">+</button></div>
+    </div>
+    <div class="row"><button id="topBtn">Back to top</button><button id="editBtn">Edit script</button></div>
+  </div>
+</div>
+
+<div id="editSheet" class="sheet">
+  <h2>Script</h2>
+  <textarea id="scriptBox" placeholder="Paste your script. Blank lines start a new paragraph."></textarea>
+  <div class="row"><button id="editCancel">Cancel</button><button id="editSave" class="primary">Save</button></div>
+</div>
+
+<div id="setupSheet" class="sheet">
+  <h2>Connect to OBS</h2>
+  <p>Pairing code</p>
+  <div class="big" id="codeVal"></div>
+  <p>In OBS on your laptop, add a <b>Browser Source</b> with this URL, width 1920, height 1080:</p>
+  <code id="obsUrl"></code>
+  <div class="row"><button id="copyBtn">Copy URL</button><button id="newCodeBtn">New code</button></div>
+  <p>Framing: add <b>&amp;y=30</b> (0 = top, 100 = bottom) and <b>&amp;zoom=1.2</b> to the URL to crop around your face. Then click <b>Start Virtual Camera</b> in OBS and pick “OBS Virtual Camera” in Zoom or Teams.</p>
+  <p>Video goes directly from phone to laptop; the free PeerJS server only introduces the two devices. Keep both on the same Wi-Fi for the best quality.</p>
+  <button id="setupClose" class="primary">Done</button>
+</div>
+
+<div id="viewer"><video id="remote" muted playsinline autoplay></video><div id="vmsg">Starting…</div></div>
+<div id="toast"></div>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem('tp_' + k); return v === null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem('tp_' + k, JSON.stringify(v)); }catch(e){} }
+};
+const params = new URLSearchParams(location.search);
+const viewerId = c => 'phoneprompter-v1-' + String(c).toLowerCase() + '-obs';
+const norm = w => w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+if (params.get('view')) runViewer(params.get('view')); else runPrompter();
+
+/* =================== VIEWER (loaded in OBS) =================== */
+function runViewer(code){
+  document.body.classList.add('viewer');
+  const v = $('remote'), msg = $('vmsg');
+  const y = parseFloat(params.get('y') ?? '35');
+  const zoom = parseFloat(params.get('zoom') ?? '1');
+  const mirror = params.get('mirror') === '1';
+  v.style.objectPosition = `50% ${isFinite(y) ? y : 35}%`;
+  v.style.transform = `scale(${(mirror ? -1 : 1) * (zoom || 1)}, ${zoom || 1})`;
+  let current = null;
+
+  function connect(){
+    const peer = new Peer(viewerId(code), { debug: 0 });
+    peer.on('open', () => { msg.classList.remove('hide'); msg.textContent = 'Waiting for phone… (code ' + code + ')'; });
+    peer.on('call', call => {
+      if (current && current !== call) { try{ current.close(); }catch(e){} }
+      current = call;
+      call.answer();
+      call.on('stream', s => { v.srcObject = s; v.play().catch(() => {}); msg.classList.add('hide'); });
+      call.on('close', () => { if (current === call) { msg.classList.remove('hide'); msg.textContent = 'Phone disconnected — waiting…'; } });
+    });
+    peer.on('disconnected', () => { try{ peer.reconnect(); }catch(e){} });
+    peer.on('error', e => {
+      if (['unavailable-id', 'network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) {
+        msg.classList.remove('hide'); msg.textContent = 'Relay error (' + e.type + ') — retrying…';
+        try{ peer.destroy(); }catch(_){}
+        setTimeout(connect, 3000);
+      }
+    });
+  }
+  connect();
+}
+
+/* =================== PROMPTER (phone) =================== */
+function runPrompter(){
+  const DEFAULT = `Tap Edit script and paste your notes here.
+
+Keep your eyes on this top line, right under the camera. In WPM mode the text scrolls at a steady speed; tap the text to pause or resume.
+
+In Voice mode the text follows what you say. Drag the text up or down at any time to jump around.`;
+
+  let script = store.get('script', DEFAULT);
+  let wpm = store.get('wpm', 140), font = store.get('font', 30), ph = store.get('ph', 40);
+  let mode = store.get('mode', 'wpm');
+  let code = store.get('code', null);
+  if (!code) { code = newCode(); store.set('code', code); }
+
+  const prompt = $('prompt'), text = $('text'), readline = $('readline'), preview = $('preview');
+  let spans = [], wi = [], wn = [];       // all spans; indices of real words; normalised words
+  let cur = 0, pos = 0, target = 0, readY = 60, maxPos = 0, pxPerWord = 20;
+  let playing = false, dragging = false;
+
+  /* ---- layout ---- */
+  function applyVars(){
+    const r = document.documentElement.style;
+    r.setProperty('--font', font + 'px'); r.setProperty('--ph', ph + 'vh');
+    $('wpmVal').textContent = wpm + ' wpm'; $('fontVal').textContent = font + 'px'; $('phVal').textContent = ph + '%';
+    $('modeWpm').classList.toggle('on', mode === 'wpm'); $('modeVoice').classList.toggle('on', mode === 'voice');
+    updatePlayBtn();
+  }
+  function render(){
+    text.innerHTML = ''; spans = []; wi = []; wn = [];
+    script.split(/\n\s*\n/).forEach(par => {
+      const words = par.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) return;
+      const p = document.createElement('p');
+      words.forEach(w => {
+        const s = document.createElement('span'); s.textContent = w; p.append(s, ' ');
+        const n = norm(w); if (n) { wi.push(spans.length); wn.push(n); }
+        spans.push(s);
+      });
+      text.appendChild(p);
+    });
+    cur = Math.min(cur, wn.length);
+    measure(); markDone(0, wn.length);
+  }
+  function measure(){
+    readY = readline.offsetTop;
+    document.documentElement.style.setProperty('--ry', readY + 'px');
+    const lh = font * 1.35;
+    if (spans.length) {
+      const last = spans[spans.length - 1];
+      maxPos = last.offsetTop + lh;
+      pxPerWord = maxPos / Math.max(1, wn.length);
+    } else { maxPos = 0; pxPerWord = 20; }
+  }
+  const topOf = n => n >= wn.length ? maxPos : spans[wi[n]].offsetTop;
+  function idxAtPos(p){ for (let i = 0; i < wn.length; i++) if (spans[wi[i]].offsetTop + 2 >= p) return i; return wn.length; }
+  function markDone(a, b){ for (let i = a; i < b && i < wn.length; i++) spans[wi[i]].classList.toggle('done', i < cur); }
+  function setCur(n){
+    n = clamp(n, 0, wn.length); if (n === cur) return;
+    const a = Math.min(n, cur), b = Math.max(n, cur); cur = n; markDone(a, b); target = topOf(cur);
+  }
+  function relayout(){
+    const idx = idxAtPos(pos);
+    applyVars(); measure();
+    pos = topOf(idx); target = mode === 'voice' ? topOf(cur) : pos;
+  }
+
+  /* ---- animation ---- */
+  let last = performance.now();
+  function frame(now){
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (!dragging) {
+      if (mode === 'wpm' && playing) {
+        pos += wpm / 60 * pxPerWord * dt;
+        if (pos >= maxPos) { pos = maxPos; setPlaying(false); }
+      } else if (mode === 'voice') {
+        pos += (target - pos) * Math.min(1, dt * 5);
+      }
+    }
+    text.style.transform = `translateY(${readY - pos}px)`;
+    requestAnimationFrame(frame);
+  }
+
+  /* ---- play / mode ---- */
+  function updatePlayBtn(){
+    const b = $('playBtn');
+    b.textContent = mode === 'wpm' ? (playing ? 'Pause' : 'Scroll') : (playing ? 'Stop listening' : 'Listen');
+    b.classList.toggle('on', playing);
+  }
+  function setPlaying(p){
+    playing = p;
+    if (mode === 'voice') p ? startRec() : stopRec();
+    updatePlayBtn();
+  }
+  const togglePlay = () => setPlaying(!playing);
+  function setMode(m){
+    if (m === mode) return;
+    setPlaying(false); mode = m; store.set('mode', m);
+    if (m === 'voice') { cur = idxAtPos(pos); target = topOf(cur); pos = target; }
+    else cur = 0;
+    markDone(0, wn.length); applyVars();
+  }
+  function step(k, d){
+    if (k === 'wpm') { wpm = clamp(wpm + d, 60, 320); store.set('wpm', wpm); applyVars(); return; }
+    if (k === 'font') { font = clamp(font + d, 16, 64); store.set('font', font); }
+    if (k === 'ph') { ph = clamp(ph + d, 20, 75); store.set('ph', ph); }
+    relayout();
+  }
+  function nudge(d){
+    const lh = font * 1.35;
+    if (mode === 'voice') setCur(idxAtPos(topOf(cur) + d * lh));
+    else pos = clamp(pos + d * lh, 0, maxPos);
+  }
+
+  /* ---- voice follow ---- */
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, wantListen = false;
+  function startRec(){
+    if (!SR) { toast('Voice-follow isn’t supported here — try Safari, or use WPM'); playing = false; updatePlayBtn(); return; }
+    wantListen = true; if (rec) return;
+    rec = new SR();
+    rec.lang = store.get('lang', navigator.language || 'en-GB');
+    rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+    rec.onresult = e => {
+      let words = [];
+      for (let i = Math.max(0, e.results.length - 3); i < e.results.length; i++) words.push(...e.results[i][0].transcript.split(/\s+/));
+      follow(words.map(norm).filter(Boolean).slice(-8));
+    };
+    rec.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        wantListen = false; playing = false; updatePlayBtn(); toast('Microphone / speech permission denied');
+      }
+    };
+    rec.onend = () => { rec = null; if (wantListen) setTimeout(() => { if (wantListen) startRec(); }, 200); };
+    try{ rec.start(); }catch(e){ rec = null; }
+  }
+  function stopRec(){ wantListen = false; if (rec) { try{ rec.stop(); }catch(e){} } }
+  function lev1(a, b){
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0, j = 0, ed = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      if (++ed > 1) return false;
+      if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+    }
+    return ed + (a.length - i) + (b.length - j) <= 1;
+  }
+  function same(a, b){
+    if (a === b) return true;
+    if (a.length >= 4 && b.length >= 4 && (a.startsWith(b) || b.startsWith(a))) return true;
+    return a.length >= 5 && b.length >= 5 && lev1(a, b);
+  }
+  function follow(words){
+    if (!words.length || !wn.length) return;
+    const lo = Math.max(0, cur - 4);
+    for (let k = Math.min(4, words.length); k >= 2; k--) {
+      const seq = words.slice(-k);
+      const hi = Math.min(wn.length, cur + (k >= 3 ? 40 : 10));
+      for (let i = lo; i + k <= hi; i++) {
+        let ok = true;
+        for (let j = 0; j < k; j++) if (!same(seq[j], wn[i + j])) { ok = false; break; }
+        if (ok) { setCur(i + k); return; }
+      }
+    }
+    const w = words[words.length - 1];
+    if (w.length >= 4) for (let i = cur; i < Math.min(wn.length, cur + 3); i++) if (same(w, wn[i])) { setCur(i + 1); return; }
+  }
+
+  /* ---- touch / keys ---- */
+  let sy = 0, sp = 0, moved = false, down = false;
+  prompt.addEventListener('pointerdown', e => { down = true; moved = false; sy = e.clientY; sp = pos; try{ prompt.setPointerCapture(e.pointerId); }catch(_){} });
+  prompt.addEventListener('pointermove', e => {
+    if (!down) return;
+    const dy = e.clientY - sy;
+    if (!moved && Math.abs(dy) > 8) { moved = true; dragging = true; }
+    if (moved) pos = clamp(sp - dy, 0, maxPos);
+  });
+  const endDrag = () => {
+    if (!down) return; down = false;
+    if (!moved) { togglePlay(); return; }
+    dragging = false;
+    if (mode === 'voice') { const n = idxAtPos(pos); const a = Math.min(n, cur), b = Math.max(n, cur); cur = n; markDone(a, b); target = topOf(cur); }
+  };
+  prompt.addEventListener('pointerup', endDrag); prompt.addEventListener('pointercancel', endDrag);
+  addEventListener('keydown', e => {   // works with Bluetooth page-turner pedals / keyboards
+    if (document.querySelector('.sheet.open')) return;
+    if (e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); nudge(1); }
+    else if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); nudge(-1); }
+    else if (e.key === 'ArrowRight') step('wpm', 10);
+    else if (e.key === 'ArrowLeft') step('wpm', -10);
+  });
+
+  /* ---- camera + streaming ---- */
+  let stream = null, peer = null, call = null, lastDial = 0, lastPeerStart = 0, badSince = null, boosted = false, wake = null;
+  const getCam = () => navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } }
+  });
+  function setStatus(kind, msg){ $('dot').className = kind; $('status').textContent = msg; }
+  async function requestWake(){ try{ if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); }catch(e){} }
+
+  async function startCamera(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus('bad', 'Camera needs HTTPS'); return; }
+    try{ stream = await getCam(); }
+    catch(e){ setStatus('bad', 'Camera blocked: ' + e.name); return; }
+    preview.srcObject = stream; preview.play().catch(() => {});
+    $('camBtn').classList.add('hide');
+    setStatus('warn', 'Connecting to relay…');
+    requestWake(); startPeer();
+  }
+  async function restartCamera(){
+    try{
+      const s = await getCam();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = s; preview.srcObject = s; preview.play().catch(() => {});
+      const nt = s.getVideoTracks()[0], pc = call && call.peerConnection;
+      let replaced = false;
+      if (pc) pc.getSenders().forEach(snd => { if (!snd.track || snd.track.kind === 'video') { snd.replaceTrack(nt).catch(() => {}); replaced = true; } });
+      if (!replaced) dial();
+    }catch(e){ setStatus('bad', 'Camera lost — tap Start camera'); $('camBtn').classList.remove('hide'); stream = null; }
+  }
+  function startPeer(){
+    lastPeerStart = Date.now();
+    peer = new Peer({ debug: 0 });
+    peer.on('open', () => dial());
+    peer.on('error', e => {
+      if (e.type === 'peer-unavailable') return;          // OBS page not open yet — monitor keeps retrying
+      setStatus('bad', 'Relay error: ' + e.type);
+      if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) { try{ peer.destroy(); }catch(_){} }
+    });
+  }
+  function dial(){
+    if (!stream || !peer || !peer.open) return;
+    lastDial = Date.now(); boosted = false;
+    if (call) { const old = call; call = null; try{ old.close(); }catch(e){} }
+    call = peer.call(viewerId(code), stream) || null;
+  }
+  function boost(pc){   // raise the video bitrate cap for sharper picture
+    pc.getSenders().forEach(s => {
+      if (!s.track || s.track.kind !== 'video') return;
+      const p = s.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate = 4000000;
+      s.setParameters(p).catch(() => {});
+    });
+  }
+  setInterval(() => {
+    if (!stream) return;
+    if (!peer || peer.destroyed) { if (Date.now() - lastPeerStart > 4000) startPeer(); return; }
+    if (peer.disconnected) { try{ peer.reconnect(); }catch(e){} setStatus('warn', 'Reconnecting to relay…'); return; }
+    if (!peer.open) return;
+    const pc = call && call.peerConnection;
+    const st = pc ? pc.connectionState : 'none';
+    if (st === 'connected') { badSince = null; setStatus('ok', 'Live → OBS'); if (!boosted) { boosted = true; boost(pc); } return; }
+    if (badSince === null) badSince = Date.now();
+    setStatus('warn', st === 'connecting' ? 'Connecting to OBS…' : 'Waiting for OBS (code ' + code + ')');
+    if (Date.now() - lastDial > 4000 && (st === 'none' || st === 'failed' || st === 'closed' || Date.now() - badSince > 8000)) { badSince = Date.now(); dial(); }
+  }, 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    requestWake();
+    if (stream) { const t = stream.getVideoTracks()[0]; if (!t || t.readyState === 'ended' || t.muted) restartCamera(); }
+  });
+
+  /* ---- setup / editor sheets ---- */
+  function newCode(){
+    const a = 'abcdefghjkmnpqrstuvwxyz23456789', r = new Uint32Array(6);
+    crypto.getRandomValues(r); return Array.from(r, x => a[x % a.length]).join('');
+  }
+  const obsUrl = () => location.href.split('#')[0].split('?')[0] + '?view=' + code;
+  function fillSetup(){ $('codeVal').textContent = code; $('obsUrl').textContent = obsUrl(); }
+  $('setupBtn').onclick = () => { fillSetup(); $('setupSheet').classList.add('open'); };
+  $('setupClose').onclick = () => $('setupSheet').classList.remove('open');
+  $('copyBtn').onclick = async () => { try{ await navigator.clipboard.writeText(obsUrl()); toast('URL copied'); }catch(e){ toast('Copy failed — select the URL manually'); } };
+  $('newCodeBtn').onclick = () => { code = newCode(); store.set('code', code); fillSetup(); dial(); toast('New code — update the OBS URL'); };
+  $('editBtn').onclick = () => { setPlaying(false); $('scriptBox').value = script; $('editSheet').classList.add('open'); };
+  $('editCancel').onclick = () => $('editSheet').classList.remove('open');
+  $('editSave').onclick = () => {
+    script = $('scriptBox').value.trim() || DEFAULT; store.set('script', script);
+    $('editSheet').classList.remove('open');
+    cur = 0; pos = 0; target = 0; render();
+  };
+
+  /* ---- wire up ---- */
+  $('camBtn').onclick = startCamera;
+  $('playBtn').onclick = togglePlay;
+  $('modeWpm').onclick = () => setMode('wpm');
+  $('modeVoice').onclick = () => setMode('voice');
+  $('topBtn').onclick = () => { setPlaying(false); cur = 0; markDone(0, wn.length); pos = 0; target = 0; };
+  document.querySelectorAll('.step button').forEach(b => b.onclick = () => step(b.dataset.k, +b.dataset.d));
+  addEventListener('resize', () => setTimeout(relayout, 100));
+
+  applyVars(); render(); requestAnimationFrame(frame);
+}
+})();
+</script>
+</body>
+</html>
