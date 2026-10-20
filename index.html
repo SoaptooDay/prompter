@@ -12,7 +12,7 @@
 :root{
   --bg:#000; --fg:#f4f4f4; --muted:#8c8c8c; --panel:#151515; --line:#2a2a2a;
   --accent:#ffd84d; --ok:#3ddc84; --warn:#ffb020; --bad:#ff5a5a;
-  --font:30px; --ph:40vh; --ry:60px;
+  --font:30px; --ph:40vh; --ry:60px; --tw:60vw;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
@@ -27,8 +27,8 @@ button.on{border-color:var(--accent);color:var(--accent)}
 #prompt{position:relative;flex:none;height:var(--ph);overflow:hidden;touch-action:none;
   -webkit-mask-image:linear-gradient(to bottom,rgba(0,0,0,.3) 0,rgba(0,0,0,.3) calc(var(--ry) - 6px),#000 var(--ry),#000 78%,transparent 100%);
   mask-image:linear-gradient(to bottom,rgba(0,0,0,.3) 0,rgba(0,0,0,.3) calc(var(--ry) - 6px),#000 var(--ry),#000 78%,transparent 100%)}
-#readline{position:absolute;left:0;top:calc(env(safe-area-inset-top,0px) + 8px);width:5px;height:calc(var(--font) * 1.35);background:var(--accent);border-radius:0 4px 4px 0;z-index:2}
-#text{position:absolute;left:0;right:0;top:0;padding:0 9vw;font-size:var(--font);line-height:1.35;font-weight:600;will-change:transform}
+#readline{position:absolute;left:max(0px, calc((100vw - var(--tw)) / 2 - 14px));top:calc(env(safe-area-inset-top,0px) + 8px);width:5px;height:calc(var(--font) * 1.35);background:var(--accent);border-radius:0 4px 4px 0;z-index:2}
+#text{position:absolute;left:0;right:0;top:0;padding:0 calc((100vw - var(--tw)) / 2);font-size:var(--font);line-height:1.35;font-weight:600;will-change:transform}
 #text p{margin-bottom:.8em}
 #text .done{color:#666}
 
@@ -45,6 +45,10 @@ button.on{border-color:var(--accent);color:var(--accent)}
 .step{display:grid;grid-template-columns:62px 52px 1fr 52px;align-items:center;gap:8px}
 .step span{color:var(--muted);font-size:14px}
 .step b{text-align:center;font-weight:600}
+.slide{display:grid;grid-template-columns:62px 1fr 52px;align-items:center;gap:8px;min-height:46px}
+.slide span{color:var(--muted);font-size:14px}
+.slide b{text-align:center;font-weight:600}
+.slide input{width:100%;accent-color:var(--accent);height:30px}
 .row{display:flex;gap:8px} .row button{flex:1}
 
 .sheet{position:fixed;inset:0;z-index:20;background:#0b0b0b;display:none;flex-direction:column;gap:12px;padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px);overflow-y:auto}
@@ -61,7 +65,8 @@ textarea{flex:1;width:100%;min-height:200px;background:#151515;color:var(--fg);b
 #viewer{display:none}
 body.viewer #app{display:none}
 body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;background:#000}
-#remote{width:100%;height:100%;object-fit:cover;transform-origin:center}
+#remote{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform-origin:center}
+#bgv{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(40px) brightness(.55);transform:scale(1.15)}
 #vmsg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#888;font:22px system-ui,sans-serif;text-align:center}
 </style>
 </head>
@@ -82,6 +87,7 @@ body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;backgro
     <div class="steppers">
       <div class="step"><span>Speed</span><button data-k="wpm" data-d="-10">−</button><b id="wpmVal"></b><button data-k="wpm" data-d="10">+</button></div>
       <div class="step"><span>Text</span><button data-k="font" data-d="-2">−</button><b id="fontVal"></b><button data-k="font" data-d="2">+</button></div>
+      <div class="slide"><span>Width</span><input type="range" id="twRange" min="30" max="95" step="1"><b id="twVal"></b></div>
       <div class="step"><span>Window</span><button data-k="ph" data-d="-5">−</button><b id="phVal"></b><button data-k="ph" data-d="5">+</button></div>
     </div>
     <div class="row"><button id="topBtn">Back to top</button><button id="editBtn">Edit script</button></div>
@@ -101,12 +107,12 @@ body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;backgro
   <p>In OBS on your laptop, add a <b>Browser Source</b> with this URL, width 1920, height 1080:</p>
   <code id="obsUrl"></code>
   <div class="row"><button id="copyBtn">Copy URL</button><button id="newCodeBtn">New code</button></div>
-  <p>Framing: add <b>&amp;y=30</b> (0 = top, 100 = bottom) and <b>&amp;zoom=1.2</b> to the URL to crop around your face. Then click <b>Start Virtual Camera</b> in OBS and pick “OBS Virtual Camera” in Zoom or Teams.</p>
+  <p>Framing: add <b>&amp;fit=blur</b> to show the whole picture with blurred sides (or <b>&amp;fit=contain</b> for black bars). With the default crop, <b>&amp;y=30</b> (0 = top, 100 = bottom) moves the crop and <b>&amp;zoom=1.2</b> zooms in. Then click <b>Start Virtual Camera</b> in OBS and pick “OBS Virtual Camera” in Zoom or Teams.</p>
   <p>Video goes directly from phone to laptop; the free PeerJS server only introduces the two devices. Keep both on the same Wi-Fi for the best quality.</p>
   <button id="setupClose" class="primary">Done</button>
 </div>
 
-<div id="viewer"><video id="remote" muted playsinline autoplay></video><div id="vmsg">Starting…</div></div>
+<div id="viewer"><video id="bgv" class="hide" muted playsinline autoplay></video><video id="remote" muted playsinline autoplay></video><div id="vmsg">Starting…</div></div>
 <div id="toast"></div>
 
 <script>
@@ -135,6 +141,10 @@ function runViewer(code){
   const y = parseFloat(params.get('y') ?? '35');
   const zoom = parseFloat(params.get('zoom') ?? '1');
   const mirror = params.get('mirror') === '1';
+  const fit = params.get('fit') || 'cover';     // cover | contain | blur
+  const bg = $('bgv');
+  v.style.objectFit = fit === 'cover' ? 'cover' : 'contain';
+  if (fit === 'blur') bg.classList.remove('hide');
   v.style.objectPosition = `50% ${isFinite(y) ? y : 35}%`;
   v.style.transform = `scale(${(mirror ? -1 : 1) * (zoom || 1)}, ${zoom || 1})`;
   let current = null;
@@ -146,7 +156,11 @@ function runViewer(code){
       if (current && current !== call) { try{ current.close(); }catch(e){} }
       current = call;
       call.answer();
-      call.on('stream', s => { v.srcObject = s; v.play().catch(() => {}); msg.classList.add('hide'); });
+      call.on('stream', s => {
+        v.srcObject = s; v.play().catch(() => {});
+        if (fit === 'blur') { bg.srcObject = s; bg.play().catch(() => {}); }
+        msg.classList.add('hide');
+      });
       call.on('close', () => { if (current === call) { msg.classList.remove('hide'); msg.textContent = 'Phone disconnected — waiting…'; } });
     });
     peer.on('disconnected', () => { try{ peer.reconnect(); }catch(e){} });
@@ -170,7 +184,7 @@ Keep your eyes on this top line, right under the camera. In WPM mode the text sc
 In Voice mode the text follows what you say. Drag the text up or down at any time to jump around.`;
 
   let script = store.get('script', DEFAULT);
-  let wpm = store.get('wpm', 140), font = store.get('font', 30), ph = store.get('ph', 40);
+  let wpm = store.get('wpm', 140), font = store.get('font', 30), ph = store.get('ph', 40), tw = store.get('tw', 60);
   let mode = store.get('mode', 'wpm');
   let code = store.get('code', null);
   if (!code) { code = newCode(); store.set('code', code); }
@@ -183,7 +197,8 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   /* ---- layout ---- */
   function applyVars(){
     const r = document.documentElement.style;
-    r.setProperty('--font', font + 'px'); r.setProperty('--ph', ph + 'vh');
+    r.setProperty('--font', font + 'px'); r.setProperty('--ph', ph + 'vh'); r.setProperty('--tw', tw + 'vw');
+    $('twRange').value = tw; $('twVal').textContent = tw + '%';
     $('wpmVal').textContent = wpm + ' wpm'; $('fontVal').textContent = font + 'px'; $('phVal').textContent = ph + '%';
     $('modeWpm').classList.toggle('on', mode === 'wpm'); $('modeVoice').classList.toggle('on', mode === 'voice');
     updatePlayBtn();
@@ -357,7 +372,8 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   let stream = null, peer = null, call = null, lastDial = 0, lastPeerStart = 0, badSince = null, boosted = false, wake = null;
   const getCam = () => navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } }
+    // 4:3 is the front sensor's native shape, so it gives the widest field of view
+    video: { facingMode: 'user', width: { ideal: 1440 }, height: { ideal: 1080 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30, max: 30 } }
   });
   function setStatus(kind, msg){ $('dot').className = kind; $('status').textContent = msg; }
   async function requestWake(){ try{ if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); }catch(e){} }
@@ -450,6 +466,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   $('modeWpm').onclick = () => setMode('wpm');
   $('modeVoice').onclick = () => setMode('voice');
   $('topBtn').onclick = () => { setPlaying(false); cur = 0; markDone(0, wn.length); pos = 0; target = 0; };
+  $('twRange').addEventListener('input', e => { tw = +e.target.value; store.set('tw', tw); relayout(); });
   document.querySelectorAll('.step button').forEach(b => b.onclick = () => step(b.dataset.k, +b.dataset.d));
   addEventListener('resize', () => setTimeout(relayout, 100));
 
