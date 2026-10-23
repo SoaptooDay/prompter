@@ -559,10 +559,10 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     toast('New code — update the OBS and send URLs');
   };
   $('copySendBtn').onclick = async () => { try{ await navigator.clipboard.writeText(sendUrl()); toast('Send URL copied'); }catch(e){ toast('Copy failed — select the URL manually'); } };
-  $('editBtn').onclick = () => { setPlaying(false); $('scriptBox').value = script; $('editSheet').classList.add('open'); };
+  $('editBtn').onclick = () => { if (mode === 'wpm') setPlaying(false); $('scriptBox').value = script; $('editSheet').classList.add('open'); };
   $('editCancel').onclick = () => $('editSheet').classList.remove('open');
   function loadScript(t, quiet){
-    setPlaying(false);
+    if (mode === 'wpm') setPlaying(false);   // voice mode keeps listening through script changes
     script = String(t).trim() || DEFAULT; store.set('script', script);
     $('editSheet').classList.remove('open');
     cur = 0; pos = 0; target = 0; render();
