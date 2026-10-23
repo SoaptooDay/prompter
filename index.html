@@ -128,6 +128,7 @@ body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;backgro
 <div id="sender">
   <h2>Send script to phone</h2>
   <p>Paste or type your script, then press Send. It loads straight into the prompter on the phone with code <b id="sendCode"></b>. Blank lines start a new paragraph.</p>
+  <button id="pasteBtn">Clear &amp; paste from clipboard</button>
   <textarea id="sendBox" placeholder="Your script…"></textarea>
   <div class="row"><button id="fetchBtn">Load script from phone</button><button id="sendBtn" class="primary">Send to phone</button></div>
   <div id="sendStatus">Connecting…</div>
@@ -198,6 +199,17 @@ function runSender(code){
     withConn({ type: 'script', text });
   };
   $('fetchBtn').onclick = () => withConn({ type: 'get' });
+  $('pasteBtn').onclick = async () => {
+    try{
+      const t = await navigator.clipboard.readText();
+      if (!t.trim()) { say('Clipboard is empty.'); return; }
+      box.value = t; store.set('draft', t); box.scrollTop = 0;
+      say('Pasted from clipboard — press Send to phone.');
+    }catch(e){
+      box.value = ''; store.set('draft', ''); box.focus();
+      say('Browser blocked clipboard access — box cleared, press Ctrl+V (Cmd+V on Mac) to paste.');
+    }
+  };
   start();
 }
 
@@ -260,9 +272,6 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   let spans = [], wi = [], wn = [];       // all spans; indices of real words; normalised words
   let cur = 0, pos = 0, target = 0, readY = 60, maxPos = 0, pxPerWord = 20;
   let playing = false, dragging = false;
-  // voice look-ahead: "ghost" is a predicted word index that runs ahead of the last recognised word
-  const LEAD = 3;                          // max words the prediction may run ahead
-  let ghost = 0, rate = wpm / 60, heardT = 0, matchT = 0;
   let cdTimer = null;                      // countdown before WPM scrolling
 
   /* ---- layout ---- */
@@ -322,12 +331,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
         pos += wpm / 60 * pxPerWord * dt;
         if (pos >= maxPos) { pos = maxPos; setPlaying(false); }
       } else if (mode === 'voice') {
-        if (ghost < cur || ghost > cur + LEAD) ghost = cur;          // resync after jumps
-        // keep gliding at your measured pace while you're talking (recent speech within 1.3 s)
-        if (playing && performance.now() - heardT < 900) ghost = Math.min(ghost + rate * 0.85 * dt, cur + LEAD, wn.length);
-        const i = Math.floor(ghost), f = ghost - i;
-        target = topOf(i) + (topOf(i + 1) - topOf(i)) * f;           // smooth between lines
-        pos += (target - pos) * Math.min(1, dt * 4);
+        pos += (target - pos) * Math.min(1, dt * 5);
       }
     }
     text.style.transform = `translateY(${readY - pos}px)`;
@@ -353,7 +357,6 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     stopCountdown();
     if (p && !playing && mode === 'wpm') { startCountdown(); updatePlayBtn(); return; }
     playing = p;
-    if (p && mode === 'voice') { heardT = 0; matchT = 0; ghost = cur; }
     if (mode === 'voice') p ? startRec() : stopRec();
     updatePlayBtn();
   }
@@ -424,24 +427,11 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
       for (let i = lo; i + k <= hi; i++) {
         let ok = true;
         for (let j = 0; j < k; j++) if (!same(seq[j], wn[i + j])) { ok = false; break; }
-        if (ok) { hear(i + k); return; }
+        if (ok) { setCur(i + k); return; }
       }
     }
     const w = words[words.length - 1];
-    if (w.length >= 3) for (let i = cur; i < Math.min(wn.length, cur + 3); i++) if (same(w, wn[i])) { hear(i + 1); return; }
-    heardT = performance.now();   // speech is coming in even if this bit didn't match — keep gliding
-  }
-  function hear(n){
-    const now = performance.now();
-    n = clamp(n, 0, wn.length);
-    if (n > cur && matchT) {      // learn your speaking rate (words/s) from how fast matches advance
-      const dtS = (now - matchT) / 1000, adv = n - cur;
-      if (dtS > 0.15 && dtS < 3 && adv <= 8) rate = clamp(rate * 0.8 + (adv / dtS) * 0.2, 1, 4);
-    }
-    if (n > cur) matchT = now;
-    heardT = now;
-    if (n < cur) ghost = n;
-    setCur(n);
+    if (w.length >= 4) for (let i = cur; i < Math.min(wn.length, cur + 3); i++) if (same(w, wn[i])) { setCur(i + 1); return; }
   }
 
   /* ---- touch / keys ---- */
@@ -575,7 +565,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     setPlaying(false);
     script = String(t).trim() || DEFAULT; store.set('script', script);
     $('editSheet').classList.remove('open');
-    cur = 0; pos = 0; target = 0; ghost = 0; render();
+    cur = 0; pos = 0; target = 0; render();
     if (!quiet) toast('New script received');
   }
   $('editSave').onclick = () => loadScript($('scriptBox').value, true);
