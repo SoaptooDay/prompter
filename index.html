@@ -117,7 +117,7 @@ body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;backgro
   <p>In OBS on your laptop, add a <b>Browser Source</b> with this URL, width 1920, height 1080:</p>
   <code id="obsUrl"></code>
   <div class="row"><button id="copyBtn">Copy URL</button><button id="newCodeBtn">New code</button></div>
-  <p>Framing: add <b>&amp;fit=blur</b> to show the whole picture with blurred sides (or <b>&amp;fit=contain</b> for black bars). With the default crop, <b>&amp;y=30</b> (0 = top, 100 = bottom) moves the crop and <b>&amp;zoom=1.2</b> zooms in. Then click <b>Start Virtual Camera</b> in OBS and pick “OBS Virtual Camera” in Zoom or Teams.</p>
+  <p>Framing: by default OBS shows the whole picture with blurred sides. Add <b>&amp;fit=contain</b> for black bars instead, or <b>&amp;fit=cover</b> to crop and fill the frame (then <b>&amp;y=30</b> moves the crop, 0 = top, 100 = bottom, and <b>&amp;zoom=1.2</b> zooms in). <b>&amp;debug=1</b> shows the resolution the phone is sending. Then click <b>Start Virtual Camera</b> in OBS and pick “OBS Virtual Camera” in Zoom or Teams.</p>
   <p><b>Send a script from another device</b> (laptop, tablet): open this URL there, paste the script and press Send. Keep this page open on the phone.</p>
   <code id="sendUrl"></code>
   <div class="row"><button id="copySendBtn">Copy send URL</button></div>
@@ -220,7 +220,7 @@ function runViewer(code){
   const y = parseFloat(params.get('y') ?? '35');
   const zoom = parseFloat(params.get('zoom') ?? '1');
   const mirror = params.get('mirror') === '1';
-  const fit = params.get('fit') || 'cover';     // cover | contain | blur
+  const fit = params.get('fit') || 'blur';      // blur (default: whole picture) | contain | cover (crop to fill)
   const bg = $('bgv');
   v.style.objectFit = fit === 'cover' ? 'cover' : 'contain';
   if (fit === 'blur') bg.classList.remove('hide');
@@ -239,6 +239,11 @@ function runViewer(code){
         v.srcObject = s; v.play().catch(() => {});
         if (fit === 'blur') { bg.srcObject = s; bg.play().catch(() => {}); }
         msg.classList.add('hide');
+        if (params.get('debug')) {                // &debug=1 shows the incoming camera resolution
+          const show = () => { msg.classList.remove('hide'); msg.style.top = '24px'; msg.style.transform = 'translateX(-50%)';
+            msg.textContent = 'Phone sends ' + v.videoWidth + ' × ' + v.videoHeight; };
+          v.addEventListener('resize', show); setTimeout(show, 1500);
+        }
       });
       call.on('close', () => { if (current === call) { msg.classList.remove('hide'); msg.textContent = 'Phone disconnected — waiting…'; } });
     });
@@ -466,12 +471,19 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     // 4:3 is the front sensor's native shape, so it gives the widest field of view
     video: { facingMode: 'user', width: { ideal: 1440 }, height: { ideal: 1080 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30, max: 30 } }
   });
+  async function widest(s){          // zoom the camera all the way out where the browser allows it
+    const t = s.getVideoTracks()[0];
+    try{
+      const c = t.getCapabilities ? t.getCapabilities() : {};
+      if (c.zoom && typeof c.zoom.min === 'number') await t.applyConstraints({ advanced: [{ zoom: c.zoom.min }] });
+    }catch(e){}
+  }
   function setStatus(kind, msg){ $('dot').className = kind; $('status').textContent = msg; }
   async function requestWake(){ try{ if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); }catch(e){} }
 
   async function startCamera(){
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus('bad', 'Camera needs HTTPS'); return; }
-    try{ stream = await getCam(); }
+    try{ stream = await getCam(); await widest(stream); }
     catch(e){ setStatus('bad', 'Camera blocked: ' + e.name); return; }
     preview.srcObject = stream; preview.play().catch(() => {});
     $('camBtn').classList.add('hide');
@@ -482,6 +494,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     try{
       const s = await getCam();
       if (stream) stream.getTracks().forEach(t => t.stop());
+      await widest(s);
       stream = s; preview.srcObject = s; preview.play().catch(() => {});
       const nt = s.getVideoTracks()[0], pc = call && call.peerConnection;
       let replaced = false;
