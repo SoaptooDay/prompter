@@ -66,7 +66,14 @@ textarea{flex:1;width:100%;min-height:200px;background:#151515;color:var(--fg);b
 
 /* ---------- Viewer (OBS) ---------- */
 #viewer{display:none}
-body.viewer #app{display:none}
+body.viewer #app, body.sender #app{display:none}
+#sender{display:none}
+body.sender{overflow:auto}
+body.sender #sender{display:flex;flex-direction:column;gap:12px;max-width:760px;margin:0 auto;min-height:100%;padding:24px 16px}
+#sender h2{font-size:22px}
+#sender p{color:#bbb;font-size:15px;line-height:1.45}
+#sendBox{min-height:55vh}
+#sendStatus{font-size:14px;color:var(--muted)}
 body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;background:#000}
 #remote{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform-origin:center}
 #bgv{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(40px) brightness(.55);transform:scale(1.15)}
@@ -111,8 +118,19 @@ body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;backgro
   <code id="obsUrl"></code>
   <div class="row"><button id="copyBtn">Copy URL</button><button id="newCodeBtn">New code</button></div>
   <p>Framing: add <b>&amp;fit=blur</b> to show the whole picture with blurred sides (or <b>&amp;fit=contain</b> for black bars). With the default crop, <b>&amp;y=30</b> (0 = top, 100 = bottom) moves the crop and <b>&amp;zoom=1.2</b> zooms in. Then click <b>Start Virtual Camera</b> in OBS and pick “OBS Virtual Camera” in Zoom or Teams.</p>
+  <p><b>Send a script from another device</b> (laptop, tablet): open this URL there, paste the script and press Send. Keep this page open on the phone.</p>
+  <code id="sendUrl"></code>
+  <div class="row"><button id="copySendBtn">Copy send URL</button></div>
   <p>Video goes directly from phone to laptop; the free PeerJS server only introduces the two devices. Keep both on the same Wi-Fi for the best quality.</p>
   <button id="setupClose" class="primary">Done</button>
+</div>
+
+<div id="sender">
+  <h2>Send script to phone</h2>
+  <p>Paste or type your script, then press Send. It loads straight into the prompter on the phone with code <b id="sendCode"></b>. Blank lines start a new paragraph.</p>
+  <textarea id="sendBox" placeholder="Your script…"></textarea>
+  <div class="row"><button id="fetchBtn">Load script from phone</button><button id="sendBtn" class="primary">Send to phone</button></div>
+  <div id="sendStatus">Connecting…</div>
 </div>
 
 <div id="viewer"><video id="bgv" class="hide" muted playsinline autoplay></video><video id="remote" muted playsinline autoplay></video><div id="vmsg">Starting…</div></div>
@@ -127,6 +145,7 @@ const store = {
 };
 const params = new URLSearchParams(location.search);
 const viewerId = c => 'phoneprompter-v1-' + String(c).toLowerCase() + '-obs';
+const phoneId = c => 'phoneprompter-v1-' + String(c).toLowerCase() + '-phone';
 const norm = w => w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -135,7 +154,52 @@ function toast(msg){
   clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
-if (params.get('view')) runViewer(params.get('view')); else runPrompter();
+if (params.get('view')) runViewer(params.get('view'));
+else if (params.get('send')) runSender(params.get('send'));
+else runPrompter();
+
+/* =================== SENDER (any other device) =================== */
+function runSender(code){
+  document.body.classList.add('sender');
+  const box = $('sendBox'), st = $('sendStatus');
+  $('sendCode').textContent = code;
+  box.value = store.get('draft', '');
+  box.addEventListener('input', () => store.set('draft', box.value));
+  let peer = null, conn = null, pending = null;
+  const say = m => { st.textContent = m; };
+
+  function start(){
+    peer = new Peer({ debug: 0 });
+    peer.on('open', () => say('Ready'));
+    peer.on('disconnected', () => { try{ peer.reconnect(); }catch(e){} });
+    peer.on('error', e => {
+      if (e.type === 'peer-unavailable') { conn = null; say('Phone not reachable — open the prompter on your phone (screen on), then try again.'); return; }
+      say('Relay error (' + e.type + ') — retrying…');
+      try{ peer.destroy(); }catch(_){}
+      setTimeout(start, 3000);
+    });
+  }
+  function withConn(msg){
+    if (!peer || !peer.open) { say('Still connecting to relay — try again in a moment.'); return; }
+    if (conn && conn.open) { conn.send(msg); return; }
+    pending = msg; say('Connecting to phone…');
+    conn = peer.connect(phoneId(code), { reliable: true });
+    conn.on('open', () => { if (pending) { conn.send(pending); pending = null; } });
+    conn.on('data', d => {
+      if (d && d.type === 'ack') say('Sent ✓ — loaded on phone at ' + new Date().toLocaleTimeString());
+      if (d && d.type === 'script') { box.value = d.text; store.set('draft', d.text); say('Loaded current script from phone'); }
+    });
+    conn.on('close', () => { conn = null; });
+    conn.on('error', () => { conn = null; say('Connection to phone failed — try again.'); });
+  }
+  $('sendBtn').onclick = () => {
+    const text = box.value.trim();
+    if (!text) { say('Nothing to send.'); return; }
+    withConn({ type: 'script', text });
+  };
+  $('fetchBtn').onclick = () => withConn({ type: 'get' });
+  start();
+}
 
 /* =================== VIEWER (loaded in OBS) =================== */
 function runViewer(code){
@@ -197,7 +261,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   let cur = 0, pos = 0, target = 0, readY = 60, maxPos = 0, pxPerWord = 20;
   let playing = false, dragging = false;
   // voice look-ahead: "ghost" is a predicted word index that runs ahead of the last recognised word
-  const LEAD = 5;                          // max words the prediction may run ahead
+  const LEAD = 3;                          // max words the prediction may run ahead
   let ghost = 0, rate = wpm / 60, heardT = 0, matchT = 0;
   let cdTimer = null;                      // countdown before WPM scrolling
 
@@ -260,10 +324,10 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
       } else if (mode === 'voice') {
         if (ghost < cur || ghost > cur + LEAD) ghost = cur;          // resync after jumps
         // keep gliding at your measured pace while you're talking (recent speech within 1.3 s)
-        if (playing && performance.now() - heardT < 1300) ghost = Math.min(ghost + rate * dt, cur + LEAD, wn.length);
+        if (playing && performance.now() - heardT < 900) ghost = Math.min(ghost + rate * 0.85 * dt, cur + LEAD, wn.length);
         const i = Math.floor(ghost), f = ghost - i;
         target = topOf(i) + (topOf(i + 1) - topOf(i)) * f;           // smooth between lines
-        pos += (target - pos) * Math.min(1, dt * 7);
+        pos += (target - pos) * Math.min(1, dt * 4);
       }
     }
     text.style.transform = `translateY(${readY - pos}px)`;
@@ -372,7 +436,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     n = clamp(n, 0, wn.length);
     if (n > cur && matchT) {      // learn your speaking rate (words/s) from how fast matches advance
       const dtS = (now - matchT) / 1000, adv = n - cur;
-      if (dtS > 0.15 && dtS < 3 && adv <= 8) rate = clamp(rate * 0.7 + (adv / dtS) * 0.3, 1, 5);
+      if (dtS > 0.15 && dtS < 3 && adv <= 8) rate = clamp(rate * 0.8 + (adv / dtS) * 0.2, 1, 4);
     }
     if (n > cur) matchT = now;
     heardT = now;
@@ -422,7 +486,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     preview.srcObject = stream; preview.play().catch(() => {});
     $('camBtn').classList.add('hide');
     setStatus('warn', 'Connecting to relay…');
-    requestWake(); startPeer();
+    requestWake(); if (peer && peer.open) dial(); else if (!peer || peer.destroyed) startPeer();
   }
   async function restartCamera(){
     try{
@@ -437,10 +501,18 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   }
   function startPeer(){
     lastPeerStart = Date.now();
-    peer = new Peer({ debug: 0 });
+    peer = new Peer(phoneId(code), { debug: 0 });
     peer.on('open', () => dial());
+    peer.on('connection', c => {                          // script sent from another device
+      c.on('data', d => {
+        if (!d) return;
+        if (d.type === 'script' && typeof d.text === 'string') { loadScript(d.text); c.send({ type: 'ack' }); }
+        if (d.type === 'get') c.send({ type: 'script', text: script });
+      });
+    });
     peer.on('error', e => {
       if (e.type === 'peer-unavailable') return;          // OBS page not open yet — monitor keeps retrying
+      if (e.type === 'unavailable-id') { try{ peer.destroy(); }catch(_){} return; }   // old session still registered — retry shortly
       setStatus('bad', 'Relay error: ' + e.type);
       if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) { try{ peer.destroy(); }catch(_){} }
     });
@@ -461,10 +533,9 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     });
   }
   setInterval(() => {
-    if (!stream) return;
     if (!peer || peer.destroyed) { if (Date.now() - lastPeerStart > 4000) startPeer(); return; }
-    if (peer.disconnected) { try{ peer.reconnect(); }catch(e){} setStatus('warn', 'Reconnecting to relay…'); return; }
-    if (!peer.open) return;
+    if (peer.disconnected) { try{ peer.reconnect(); }catch(e){} if (stream) setStatus('warn', 'Reconnecting to relay…'); return; }
+    if (!stream || !peer.open) return;
     const pc = call && call.peerConnection;
     const st = pc ? pc.connectionState : 'none';
     if (st === 'connected') { badSince = null; setStatus('ok', 'Live → OBS'); if (!boosted) { boosted = true; boost(pc); } return; }
@@ -483,19 +554,31 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     const a = 'abcdefghjkmnpqrstuvwxyz23456789', r = new Uint32Array(6);
     crypto.getRandomValues(r); return Array.from(r, x => a[x % a.length]).join('');
   }
-  const obsUrl = () => location.href.split('#')[0].split('?')[0] + '?view=' + code;
-  function fillSetup(){ $('codeVal').textContent = code; $('obsUrl').textContent = obsUrl(); }
+  const base = () => location.href.split('#')[0].split('?')[0];
+  const obsUrl = () => base() + '?view=' + code;
+  const sendUrl = () => base() + '?send=' + code;
+  function fillSetup(){ $('codeVal').textContent = code; $('obsUrl').textContent = obsUrl(); $('sendUrl').textContent = sendUrl(); }
   $('setupBtn').onclick = () => { fillSetup(); $('setupSheet').classList.add('open'); };
   $('setupClose').onclick = () => $('setupSheet').classList.remove('open');
   $('copyBtn').onclick = async () => { try{ await navigator.clipboard.writeText(obsUrl()); toast('URL copied'); }catch(e){ toast('Copy failed — select the URL manually'); } };
-  $('newCodeBtn').onclick = () => { code = newCode(); store.set('code', code); fillSetup(); dial(); toast('New code — update the OBS URL'); };
+  $('newCodeBtn').onclick = () => {
+    code = newCode(); store.set('code', code); fillSetup();
+    if (call) { try{ call.close(); }catch(e){} call = null; }
+    if (peer) { try{ peer.destroy(); }catch(e){} }
+    lastPeerStart = 0;                                    // monitor re-registers under the new code
+    toast('New code — update the OBS and send URLs');
+  };
+  $('copySendBtn').onclick = async () => { try{ await navigator.clipboard.writeText(sendUrl()); toast('Send URL copied'); }catch(e){ toast('Copy failed — select the URL manually'); } };
   $('editBtn').onclick = () => { setPlaying(false); $('scriptBox').value = script; $('editSheet').classList.add('open'); };
   $('editCancel').onclick = () => $('editSheet').classList.remove('open');
-  $('editSave').onclick = () => {
-    script = $('scriptBox').value.trim() || DEFAULT; store.set('script', script);
+  function loadScript(t, quiet){
+    setPlaying(false);
+    script = String(t).trim() || DEFAULT; store.set('script', script);
     $('editSheet').classList.remove('open');
-    cur = 0; pos = 0; target = 0; render();
-  };
+    cur = 0; pos = 0; target = 0; ghost = 0; render();
+    if (!quiet) toast('New script received');
+  }
+  $('editSave').onclick = () => loadScript($('scriptBox').value, true);
 
   /* ---- wire up ---- */
   $('camBtn').onclick = startCamera;
@@ -507,7 +590,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   document.querySelectorAll('.step button').forEach(b => b.onclick = () => step(b.dataset.k, +b.dataset.d));
   addEventListener('resize', () => setTimeout(relayout, 100));
 
-  applyVars(); render(); requestAnimationFrame(frame);
+  applyVars(); render(); requestAnimationFrame(frame); startPeer();
 }
 })();
 </script>
