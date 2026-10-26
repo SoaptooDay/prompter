@@ -98,6 +98,7 @@ body.viewer #viewer{display:block;position:fixed;inset:0;overflow:hidden;backgro
       <div class="step"><span>Speed</span><button data-k="wpm" data-d="-10">−</button><b id="wpmVal"></b><button data-k="wpm" data-d="10">+</button></div>
       <div class="step"><span>Text</span><button data-k="font" data-d="-2">−</button><b id="fontVal"></b><button data-k="font" data-d="2">+</button></div>
       <div class="slide"><span>Width</span><input type="range" id="twRange" min="30" max="95" step="1"><b id="twVal"></b></div>
+      <div class="slide"><span>Zoom</span><input type="range" id="zoomRange" min="1" max="3" step="0.05"><b id="zoomVal"></b></div>
       <div class="step"><span>Window</span><button data-k="ph" data-d="-5">−</button><b id="phVal"></b><button data-k="ph" data-d="5">+</button></div>
     </div>
     <div class="row"><button id="topBtn">Back to top</button><button id="editBtn">Edit script</button></div>
@@ -225,12 +226,17 @@ function runViewer(code){
   v.style.objectFit = fit === 'cover' ? 'cover' : 'contain';
   if (fit === 'blur') bg.classList.remove('hide');
   v.style.objectPosition = `50% ${isFinite(y) ? y : 35}%`;
-  v.style.transform = `scale(${(mirror ? -1 : 1) * (zoom || 1)}, ${zoom || 1})`;
+  let dz = 1;                                    // digital zoom sent from the phone's Zoom slider
+  const applyT = () => { const z = (zoom || 1) * dz; v.style.transform = `scale(${(mirror ? -1 : 1) * z}, ${z})`; };
+  applyT();
   let current = null;
 
   function connect(){
     const peer = new Peer(viewerId(code), { debug: 0 });
     peer.on('open', () => { msg.classList.remove('hide'); msg.textContent = 'Waiting for phone… (code ' + code + ')'; });
+    peer.on('connection', c => c.on('data', d => {
+      if (d && d.type === 'zoom' && isFinite(d.z)) { dz = clamp(+d.z, 1, 5); applyT(); }
+    }));
     peer.on('call', call => {
       if (current && current !== call) { try{ current.close(); }catch(e){} }
       current = call;
@@ -471,19 +477,45 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     // 4:3 is the front sensor's native shape, so it gives the widest field of view
     video: { facingMode: 'user', width: { ideal: 1440 }, height: { ideal: 1080 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30, max: 30 } }
   });
-  async function widest(s){          // zoom the camera all the way out where the browser allows it
+  /* ---- camera zoom: real lens zoom where the browser exposes it, digital zoom otherwise ---- */
+  let camZoom = store.get('camZoom', 1), hwZoom = null, digital = 1, vconn = null, lastVconnTry = 0;
+  function zoomUI(){
+    const r = $('zoomRange');
+    r.min = hwZoom ? Math.floor(hwZoom.min * 20) / 20 : 1;
+    r.max = hwZoom ? Math.max(3, Math.min(5, hwZoom.max)) : 3;
+    camZoom = clamp(camZoom, +r.min, +r.max);
+    r.value = camZoom;
+    $('zoomVal').textContent = (+camZoom).toFixed(camZoom < 1 ? 2 : 1) + '×';
+  }
+  async function applyZoom(s){
+    s = s || stream;
+    if (!s) { zoomUI(); return; }
     const t = s.getVideoTracks()[0];
-    try{
-      const c = t.getCapabilities ? t.getCapabilities() : {};
-      if (c.zoom && typeof c.zoom.min === 'number') await t.applyConstraints({ advanced: [{ zoom: c.zoom.min }] });
-    }catch(e){}
+    let c = {};
+    try{ c = t.getCapabilities ? t.getCapabilities() : {}; }catch(e){}
+    hwZoom = c.zoom && typeof c.zoom.min === 'number' && c.zoom.max > c.zoom.min ? c.zoom : null;
+    zoomUI();
+    let hw = 1; digital = camZoom;
+    if (hwZoom) { hw = clamp(camZoom, hwZoom.min, hwZoom.max); digital = Math.max(1, camZoom / hw); }
+    if (hwZoom) { try{ await t.applyConstraints({ advanced: [{ zoom: hw }] }); }catch(e){ digital = Math.max(1, camZoom); } }
+    preview.style.transform = `scale(${-digital}, ${digital})`;
+    sendZoom();
+  }
+  function sendZoom(){ if (vconn && vconn.open) vconn.send({ type: 'zoom', z: digital }); }
+  function ensureVconn(){            // small data link to OBS so it can mirror the digital zoom
+    if ((vconn && (vconn.open || Date.now() - lastVconnTry < 5000)) || !peer || !peer.open) return;
+    lastVconnTry = Date.now();
+    vconn = peer.connect(viewerId(code), { reliable: true });
+    vconn.on('open', sendZoom);
+    vconn.on('close', () => { vconn = null; });
+    vconn.on('error', () => { vconn = null; });
   }
   function setStatus(kind, msg){ $('dot').className = kind; $('status').textContent = msg; }
   async function requestWake(){ try{ if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); }catch(e){} }
 
   async function startCamera(){
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus('bad', 'Camera needs HTTPS'); return; }
-    try{ stream = await getCam(); await widest(stream); }
+    try{ stream = await getCam(); await applyZoom(stream); }
     catch(e){ setStatus('bad', 'Camera blocked: ' + e.name); return; }
     preview.srcObject = stream; preview.play().catch(() => {});
     $('camBtn').classList.add('hide');
@@ -494,7 +526,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     try{
       const s = await getCam();
       if (stream) stream.getTracks().forEach(t => t.stop());
-      await widest(s);
+      await applyZoom(s);
       stream = s; preview.srcObject = s; preview.play().catch(() => {});
       const nt = s.getVideoTracks()[0], pc = call && call.peerConnection;
       let replaced = false;
@@ -541,7 +573,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
     if (!stream || !peer.open) return;
     const pc = call && call.peerConnection;
     const st = pc ? pc.connectionState : 'none';
-    if (st === 'connected') { badSince = null; setStatus('ok', 'Live → OBS'); if (!boosted) { boosted = true; boost(pc); } return; }
+    if (st === 'connected') { ensureVconn(); badSince = null; setStatus('ok', 'Live → OBS'); if (!boosted) { boosted = true; boost(pc); } return; }
     if (badSince === null) badSince = Date.now();
     setStatus('warn', st === 'connecting' ? 'Connecting to OBS…' : 'Waiting for OBS (code ' + code + ')');
     if (Date.now() - lastDial > 4000 && (st === 'none' || st === 'failed' || st === 'closed' || Date.now() - badSince > 8000)) { badSince = Date.now(); dial(); }
@@ -567,6 +599,7 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   $('newCodeBtn').onclick = () => {
     code = newCode(); store.set('code', code); fillSetup();
     if (call) { try{ call.close(); }catch(e){} call = null; }
+    if (vconn) { try{ vconn.close(); }catch(e){} vconn = null; }
     if (peer) { try{ peer.destroy(); }catch(e){} }
     lastPeerStart = 0;                                    // monitor re-registers under the new code
     toast('New code — update the OBS and send URLs');
@@ -590,10 +623,11 @@ In Voice mode the text follows what you say. Drag the text up or down at any tim
   $('modeVoice').onclick = () => setMode('voice');
   $('topBtn').onclick = () => { setPlaying(false); cur = 0; markDone(0, wn.length); pos = 0; target = 0; };
   $('twRange').addEventListener('input', e => { tw = +e.target.value; store.set('tw', tw); relayout(); });
+  $('zoomRange').addEventListener('input', e => { camZoom = +e.target.value; store.set('camZoom', camZoom); applyZoom(); });
   document.querySelectorAll('.step button').forEach(b => b.onclick = () => step(b.dataset.k, +b.dataset.d));
   addEventListener('resize', () => setTimeout(relayout, 100));
 
-  applyVars(); render(); requestAnimationFrame(frame); startPeer();
+  applyVars(); render(); zoomUI(); requestAnimationFrame(frame); startPeer();
 }
 })();
 </script>
